@@ -1,5 +1,7 @@
 # CAKRes
 
+Read our press release [here](https://github.com/cpraskoti/CAKRes/blob/main/prfaq/Press_Release.pdf). For Frequently Asked Questions, refer [here](https://github.com/cpraskoti/CAKRes/blob/main/prfaq/FAQ.pdf).
+
 ## Introduction
 This is a project by **CAKRes Innovations** that aims to improve workflow of research scientists in natural sciences. 
 It aims to do so by producing real-world accurate upscaled image of low-resolution simulation of physical phenomenon.
