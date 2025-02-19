@@ -15,6 +15,7 @@ This project was motivated by a necessity in one of our labs. We drew inspiratio
 We are training our models using the following resources:
 
 - 1x RTX4090
+- 1x RTX3090
 - 64 GB Memory
 - 5 TB Storage
 - Apache Spark cluster
