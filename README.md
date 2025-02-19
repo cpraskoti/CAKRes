@@ -9,3 +9,14 @@ Currently, the project to focuses on Super Resolution in the domain of Fluid Dyn
 ## Motivation
 This project was motivated by a necessity in one of our labs. We drew inspiration from [this project](https://github.com/erichson/SuperBench).
 
+## Resources
+We are training our models using the following resources:
+
+- 1x RTX4090
+- 64 GB Memory
+- 5 TB Storage
+- Apache Spark cluster
+
+## Benchmark
+We might use [this benchmark](https://arxiv.org/abs/2306.14070).
+
