@@ -25,5 +25,5 @@ We might use [this benchmark](https://arxiv.org/abs/2306.14070).
 
 ## Dataset
 
-The dataset are available [here](https://drive.google.com/drive/u/1/folders/17CK5aiOUJVVLuuEH418aw_RKAD7t_821). Use your UT Email Adderss to access it.
+The dataset are available [here](https://drive.google.com/drive/folders/17CK5aiOUJVVLuuEH418aw_RKAD7t_821?usp=drive_link). Use your UT Email Adderss to access it.
 
