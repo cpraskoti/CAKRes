@@ -505,6 +505,7 @@ def main(args):
     logger.info(f"Starting training for {args.epochs} epochs...")
     best_val_loss = float('inf')
     metrics_history = [] # Store metrics per epoch
+    epochs_no_improve = 0 # Counter for early stopping
 
     for epoch in range(args.epochs):
         model.train()
@@ -559,16 +560,25 @@ def main(args):
         t2 = default_timer()
         logger.info(f'Epoch [{epoch+1}/{args.epochs}], Time: {t2-t1:.1f}s, Train L2: {train_l2:.4f}, Val L2: {val_l2:.4f}')
 
-        # Save best model based on validation L2 loss
-        if val_l2 < best_val_loss:
+        # Save best model based on validation L2 loss & check for early stopping
+        if val_l2 < best_val_loss - args.early_stopping_delta:
             best_val_loss = val_l2
+            epochs_no_improve = 0 # Reset counter
             save_path = f'best_fno_fluid_model_s{args.scale}'
             if args.use_cropping:
                 save_path += f'_crop{args.patch_size}'
             save_path += '.pth'
             full_save_path = os.path.join(exp_dir, save_path)
             torch.save(model.state_dict(), full_save_path)
-            logger.info(f"Saved best model to {full_save_path} with Val L2: {best_val_loss:.4f}")
+            logger.info(f"Validation loss improved. Saved best model to {full_save_path} with Val L2: {best_val_loss:.4f}")
+        else:
+            epochs_no_improve += 1
+            logger.info(f"Validation loss did not improve for {epochs_no_improve} epoch(s). Current best: {best_val_loss:.4f}")
+
+        # Early stopping check
+        if args.early_stopping_patience > 0 and epochs_no_improve >= args.early_stopping_patience:
+            logger.info(f"Early stopping triggered after {epoch + 1} epochs due to no improvement for {args.early_stopping_patience} consecutive epochs.")
+            break # Exit the training loop
 
     # 9. Final Evaluation (Optional)
     logger.info("\nTraining finished. Loading best model...")
@@ -733,6 +743,10 @@ def parse_args():
     # Cropping Args
     parser.add_argument('--use_cropping', action='store_true', help='Enable paired random cropping')
     parser.add_argument('--patch_size', type=int, default=64, help='HR patch size for cropping (LR patch size = patch_size // scale)')
+
+    # Early Stopping Args
+    parser.add_argument('--early_stopping_patience', type=int, default=0, help='Number of epochs to wait for improvement before stopping (0 or less to disable)')
+    parser.add_argument('--early_stopping_delta', type=float, default=0.0, help='Minimum change in validation loss to qualify as improvement')
 
     args = parser.parse_args()
 
