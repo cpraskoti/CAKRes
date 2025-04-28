@@ -52,7 +52,7 @@ MODES = 16         # Number of Fourier modes
 WIDTH = 64         # Feature width in FNO layers
 
 # Training parameters
-BATCH_SIZE = 8
+BATCH_SIZE = 64
 LEARNING_RATE = 0.001
 EPOCHS = 50        # Reduced for quicker testing
 STEP_SIZE = 10     # Learning rate scheduler step size
