@@ -23,6 +23,7 @@ import argparse
 import json # For saving config
 import csv  # For saving metrics
 from datetime import datetime # For timestamping experiments
+import logging
 
 # Try to import cropping function (optional dependency if not cropping)
 try:
@@ -57,6 +58,9 @@ EPOCHS = 50        # Reduced for quicker testing
 STEP_SIZE = 10     # Learning rate scheduler step size
 GAMMA = 0.5        # Learning rate scheduler gamma
 WEIGHT_DECAY = 1e-4
+
+# Experiment Name
+DEFAULT_EXP_NAME = 'fno_fluid_exp' # Default experiment name
 
 # Set random seeds for reproducibility
 torch.manual_seed(0)
@@ -420,19 +424,37 @@ class FluidFlowFNODataset(Dataset):
 
 # --- Main Training Script ---
 def main(args):
-    print("Starting FNO Fluid Flow Super-Resolution")
+    # === Experiment Setup ===
+    exp_dir = os.path.join("experiments", args.exp_name)
+    os.makedirs(exp_dir, exist_ok=True)
+
+    # Configure logging
+    log_file = os.path.join(exp_dir, 'output.log')
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s [%(levelname)s] %(message)s',
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler() # Also print to console
+        ]
+    )
+    logger = logging.getLogger()
+    logger.info("Starting FNO Fluid Flow Super-Resolution")
+    logger.info(f"Experiment Directory: {exp_dir}")
+    logger.info(f"Arguments: {args}")
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-    print(f"Using cropping: {args.use_cropping}")
+    logger.info(f"Using device: {device}")
+    logger.info(f"Using cropping: {args.use_cropping}")
     if args.use_cropping:
-        print(f"Patch size (HR): {args.patch_size}x{args.patch_size}")
-        print(f"Patch size (LR): {args.patch_size // args.scale}x{args.patch_size // args.scale}")
+        logger.info(f"Patch size (HR): {args.patch_size}x{args.patch_size}")
+        logger.info(f"Patch size (LR): {args.patch_size // args.scale}x{args.patch_size // args.scale}")
 
     # 1. Load Data
     u_data, v_data, w_data = load_fluid_data(args.data_path, args.t_skip, args.n_skip, sample_limit=args.sample_limit)
 
     if u_data is None:
-        print("Failed to load data. Exiting.")
+        logger.error("Failed to load data. Exiting.")
         exit()
 
     # 2. Split Data (80/20 Train/Validation)
@@ -440,9 +462,9 @@ def main(args):
     u_train, v_train, w_train = u_data[:split_idx], v_data[:split_idx], w_data[:split_idx]
     u_val, v_val, w_val = u_data[split_idx:], v_data[split_idx:], w_data[split_idx:]
 
-    print(f"Train samples: {len(u_train)}, Validation samples: {len(u_val)}")
+    logger.info(f"Train samples: {len(u_train)}, Validation samples: {len(u_val)}")
     if len(u_train) == 0 or len(u_val) == 0:
-        print("Error: Not enough data for train/validation split. Need at least 2 samples.")
+        logger.error("Error: Not enough data for train/validation split. Need at least 2 samples.")
         exit()
 
     # 3. Create Datasets
@@ -472,7 +494,7 @@ def main(args):
 
     # 6. Initialize Model
     model = FNOFluidSR(modes1=args.modes, modes2=args.modes, width=args.width, scale_factor=args.scale, use_cropping=args.use_cropping).to(device)
-    print(f"FNO Model Parameter Count: {model.count_params()}")
+    logger.info(f"FNO Model Parameter Count: {model.count_params()}")
 
     # 7. Setup Optimizer, Scheduler, Loss
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
@@ -480,10 +502,9 @@ def main(args):
     myloss = LpLoss(size_average=False) # Use LpLoss for evaluation metric
 
     # 8. Training Loop
-    print(f"Starting training for {args.epochs} epochs...")
+    logger.info(f"Starting training for {args.epochs} epochs...")
     best_val_loss = float('inf')
-    train_losses = []
-    val_losses = []
+    metrics_history = [] # Store metrics per epoch
 
     for epoch in range(args.epochs):
         model.train()
@@ -527,11 +548,16 @@ def main(args):
         train_l2 /= len(train_dataset)
         val_l2 /= len(val_dataset)
 
-        train_losses.append(train_l2)
-        val_losses.append(val_l2)
+        # Store metrics for this epoch
+        epoch_metrics = {
+            'epoch': epoch + 1,
+            'train_l2': train_l2,
+            'val_l2': val_l2,
+        }
+        metrics_history.append(epoch_metrics)
 
         t2 = default_timer()
-        print(f'Epoch [{epoch+1}/{args.epochs}], Time: {t2-t1:.1f}s, Train L2: {train_l2:.4f}, Val L2: {val_l2:.4f}')
+        logger.info(f'Epoch [{epoch+1}/{args.epochs}], Time: {t2-t1:.1f}s, Train L2: {train_l2:.4f}, Val L2: {val_l2:.4f}')
 
         # Save best model based on validation L2 loss
         if val_l2 < best_val_loss:
@@ -540,15 +566,17 @@ def main(args):
             if args.use_cropping:
                 save_path += f'_crop{args.patch_size}'
             save_path += '.pth'
-            torch.save(model.state_dict(), save_path)
-            print(f"Saved best model to {save_path} with Val L2: {best_val_loss:.4f}")
+            full_save_path = os.path.join(exp_dir, save_path)
+            torch.save(model.state_dict(), full_save_path)
+            logger.info(f"Saved best model to {full_save_path} with Val L2: {best_val_loss:.4f}")
 
     # 9. Final Evaluation (Optional)
-    print("\nTraining finished. Loading best model...")
-    load_path = f'best_fno_fluid_model_s{args.scale}'
+    logger.info("\nTraining finished. Loading best model...")
+    model_filename = f'best_fno_fluid_model_s{args.scale}'
     if args.use_cropping:
-        load_path += f'_crop{args.patch_size}'
-    load_path += '.pth'
+        model_filename += f'_crop{args.patch_size}'
+    model_filename += '.pth'
+    load_path = os.path.join(exp_dir, model_filename)
 
     if os.path.exists(load_path):
         model.load_state_dict(torch.load(load_path))
@@ -562,15 +590,30 @@ def main(args):
                 out = y_normalizer.decode(out_norm)
                 final_val_l2 += myloss(out.view(out.size(0), -1), y.view(y.size(0), -1)).item()
         final_val_l2 /= len(val_dataset)
-        print(f"Final Best Model Validation L2 Loss: {final_val_l2:.4f}")
+        logger.info(f"Final Best Model Validation L2 Loss: {final_val_l2:.4f}")
     else:
-        print(f"Best model file not found at {load_path}. Skipping final evaluation.")
+        logger.warning(f"Best model file not found at {load_path}. Skipping final evaluation.")
+
+    # Save metrics history to JSON
+    metrics_file_path = os.path.join(exp_dir, 'metrics.json')
+    try:
+        with open(metrics_file_path, 'w') as f:
+            json.dump(metrics_history, f, indent=4)
+        logger.info(f"Saved metrics history to {metrics_file_path}")
+    except Exception as e:
+        logger.error(f"Error saving metrics to {metrics_file_path}: {e}")
 
     # 10. Plot Loss Curves (Optional)
-    loss_plot_path = f'fno_fluid_loss_s{args.scale}'
+    # Extract data for plotting from metrics_history
+    epochs_list = [m['epoch'] for m in metrics_history]
+    train_losses = [m['train_l2'] for m in metrics_history]
+    val_losses = [m['val_l2'] for m in metrics_history]
+
+    loss_plot_filename = f'fno_fluid_loss_s{args.scale}'
     if args.use_cropping:
-        loss_plot_path += f'_crop{args.patch_size}'
-    loss_plot_path += '.png'
+        loss_plot_filename += f'_crop{args.patch_size}'
+    loss_plot_filename += '.png'
+    loss_plot_path = os.path.join(exp_dir, loss_plot_filename)
 
     plt.figure(figsize=(10, 5))
     plt.plot(train_losses, label='Train L2 Loss')
@@ -582,15 +625,15 @@ def main(args):
     plt.legend()
     plt.grid(True)
     plt.savefig(loss_plot_path)
-    print(f"Saved loss plot to {loss_plot_path}")
-    # plt.show() # Uncomment to display plot directly
+    logger.info(f"Saved loss plot to {loss_plot_path}")
+    plt.close() # Close plot to avoid display issues
 
     # 11. Visualize Results (Optional)
-    print("Visualizing results for a few validation samples (showing patches if cropping)...")
+    logger.info("Visualizing results for a few validation samples (showing patches if cropping)...")
     model.eval()
     num_viz_samples = min(3, len(val_dataset)) # Visualize fewer if dataset is small
     if num_viz_samples == 0:
-        print("No validation samples to visualize.")
+        logger.warning("No validation samples to visualize.")
     else:
         with torch.no_grad():
             batch_count = 0
@@ -649,19 +692,24 @@ def main(args):
                     axes[2].set_xticks([]); axes[2].set_yticks([])
 
                     plt.tight_layout()
-                    viz_path = f'fno_fluid_visualization_{global_sample_idx}_s{args.scale}'
-                    if args.use_cropping: viz_path += f'_crop{args.patch_size}'
-                    viz_path += '.png'
+                    viz_filename = f'fno_fluid_visualization_{global_sample_idx}_s{args.scale}'
+                    if args.use_cropping: viz_filename += f'_crop{args.patch_size}'
+                    viz_filename += '.png'
+                    viz_path = os.path.join(exp_dir, viz_filename)
                     plt.savefig(viz_path)
-                    print(f"Saved visualization plot to {viz_path}")
+                    logger.info(f"Saved visualization plot to {viz_path}")
                     plt.close(fig) # Close figure after saving
 
                 sample_count += viz_in_batch # Update count of visualized samples
 
-    print("FNO Fluid Flow script completed.")
+    logger.info("FNO Fluid Flow script completed.")
 
-if __name__ == "__main__":
+# --- Argument Parsing ---
+def parse_args():
     parser = argparse.ArgumentParser(description="FNO for Fluid Flow Super-Resolution")
+
+    # Experiment Args
+    parser.add_argument('--exp_name', type=str, default=DEFAULT_EXP_NAME, help='Name for the experiment directory')
 
     # Data Args
     parser.add_argument('--data_path', type=str, default=DATA_PATH, help='Path to HDF5 data file')
@@ -692,4 +740,8 @@ if __name__ == "__main__":
     if args.sample_limit is not None and args.sample_limit <= 0:
         args.sample_limit = None
 
+    return args
+
+if __name__ == "__main__":
+    args = parse_args()
     main(args)
