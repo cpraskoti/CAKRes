@@ -1,0 +1,10 @@
+.ipynb_checkpoints/
+*.h5
+data/
+experiments/
+*.pth
+*.png
+*.json
+*.csv
+*.txt
+*.log
