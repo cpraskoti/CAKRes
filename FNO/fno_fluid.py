@@ -4,7 +4,7 @@ fno_fluid.py
 
 Applies Fourier Neural Operator (FNO) to fluid flow super-resolution.
 Adapted from fourier_2d.py and swinir_fluid.py.
-Includes option for random cropping.
+Includes option for random cropping and experiment logging.
 """
 
 import h5py
@@ -19,14 +19,23 @@ from timeit import default_timer
 import operator
 from functools import reduce
 from functools import partial
-import argparse # Added for command-line arguments
+import argparse
+import json # For saving config
+import csv  # For saving metrics
+from datetime import datetime # For timestamping experiments
+
 # Try to import cropping function (optional dependency if not cropping)
 try:
     from basicsr.data.transforms import paired_random_crop
+    from basicsr.utils.img_util import tensor2img # For visualization
+    from sklearn.metrics import mean_squared_error, mean_absolute_error # If cropping
     HAS_BASICSCR = True
 except ImportError:
     HAS_BASICSCR = False
     paired_random_crop = None
+    tensor2img = None
+    mean_squared_error = None
+    mean_absolute_error = None
 
 # --- Configuration ---
 # Data parameters
@@ -78,14 +87,16 @@ class LpLoss(object):
 
     def rel(self, x, y):
         num_examples = x.size()[0]
-        diff_norms = torch.norm(x.reshape(num_examples,-1) - y.reshape(num_examples,-1), self.p, 1)
         y_norms = torch.norm(y.reshape(num_examples,-1), self.p, 1)
+        diff_norms = torch.norm(x.reshape(num_examples,-1) - y.reshape(num_examples,-1), self.p, 1)
+        y_norms = torch.where(y_norms == 0, torch.tensor(1e-8, device=y.device), y_norms)
+        fraction = diff_norms / y_norms
         if self.reduction:
             if self.size_average:
-                return torch.mean(diff_norms/y_norms)
+                return torch.mean(fraction)
             else:
-                return torch.sum(diff_norms/y_norms)
-        return diff_norms/y_norms
+                return torch.sum(fraction)
+        return fraction
 
     def __call__(self, x, y):
         return self.rel(x, y)
@@ -166,12 +177,13 @@ class SpectralConv2d_new(nn.Module):
 
 # --- FNO Model for Super-Resolution ---
 class FNOFluidSR(nn.Module):
-    def __init__(self, modes1, modes2, width, scale_factor):
+    def __init__(self, modes1, modes2, width, scale_factor, use_cropping=False):
         super(FNOFluidSR, self).__init__()
         self.modes1 = modes1
         self.modes2 = modes2
         self.width = width
         self.scale_factor = scale_factor
+        self.use_cropping = use_cropping
 
         # Input channels: 3 (u,v,w) + 2 (grid_x, grid_y) = 5
         self.fc0 = nn.Linear(5, self.width)
@@ -195,7 +207,10 @@ class FNOFluidSR(nn.Module):
         self.bn3 = torch.nn.BatchNorm2d(self.width)
 
         # Upsampling layer
-        self.upsample = nn.Upsample(scale_factor=self.scale_factor, mode='bilinear', align_corners=False)
+        if self.scale_factor > 1:
+            self.upsample = nn.Upsample(scale_factor=self.scale_factor, mode='bilinear', align_corners=False)
+        else:
+            self.upsample = nn.Identity()
 
         # Final projection to output channels (u_hr, v_hr, w_hr)
         self.fc1 = nn.Linear(self.width, 128)
@@ -456,7 +471,7 @@ def main(args):
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
     # 6. Initialize Model
-    model = FNOFluidSR(modes1=args.modes, modes2=args.modes, width=args.width, scale_factor=args.scale).to(device)
+    model = FNOFluidSR(modes1=args.modes, modes2=args.modes, width=args.width, scale_factor=args.scale, use_cropping=args.use_cropping).to(device)
     print(f"FNO Model Parameter Count: {model.count_params()}")
 
     # 7. Setup Optimizer, Scheduler, Loss

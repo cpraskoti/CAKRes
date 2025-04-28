@@ -20,6 +20,8 @@ from functools import reduce
 from functools import partial
 import argparse
 from sklearn.metrics import mean_squared_error, mean_absolute_error
+import logging
+import json
 
 # Try to import cropping function (Required for this script)
 try:
@@ -46,6 +48,7 @@ DEFAULT_EPOCHS = 50
 DEFAULT_STEP_SIZE = 10 # Matches previous FNO script
 DEFAULT_GAMMA = 0.5  # Matches previous FNO script
 DEFAULT_WEIGHT_DECAY = 1e-4
+DEFAULT_EXP_NAME = 'fno_cropped_exp' # Default experiment name
 
 # Set random seeds for reproducibility
 torch.manual_seed(0)
@@ -222,7 +225,7 @@ class FluidFlowCroppedDataset(Dataset):
 
 
 # --- Visualization Function (SwinIR style) ---
-def visualize_results(model, dataloader, device, num_samples=3, scale_factor=4, save_prefix="fno_crop_viz"):
+def visualize_results(model, dataloader, device, exp_dir, num_samples=3, scale_factor=4, save_prefix="fno_crop_viz"):
     print("Visualizing results...")
     model.eval()
     count = 0
@@ -270,7 +273,7 @@ def visualize_results(model, dataloader, device, num_samples=3, scale_factor=4, 
             axes[2].set_xticks([]); axes[2].set_yticks([])
 
             plt.tight_layout()
-            save_path = f"{save_prefix}_{i}_s{scale_factor}.png"
+            save_path = os.path.join(exp_dir, f"{save_prefix}_{i}_s{scale_factor}.png")
             plt.savefig(save_path)
             print(f"Saved visualization: {save_path}")
             plt.close(fig) # Close plot to avoid display issues in non-interactive envs
@@ -279,21 +282,64 @@ def visualize_results(model, dataloader, device, num_samples=3, scale_factor=4, 
 
 # --- Main Training Script ---
 def main(args):
-    print("Starting FNO Fluid Flow Super-Resolution (Cropped Mode)")
+    # === Experiment Setup ===
+    exp_dir = os.path.join("experiments", args.exp_name)
+    os.makedirs(exp_dir, exist_ok=True)
+
+    # Configure logging
+    log_file = os.path.join(exp_dir, 'output.log')
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s [%(levelname)s] %(message)s',
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler() # Also print to console
+        ]
+    )
+    logger = logging.getLogger()
+    logger.info("Starting FNO Fluid Flow Super-Resolution (Cropped Mode)")
+    logger.info(f"Experiment Directory: {exp_dir}")
+    logger.info(f"Arguments: {args}")
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-    print(f"Scale: {args.scale}, HR Patch Size: {args.patch_size}x{args.patch_size}")
+    logger.info(f"Using device: {device}")
+    logger.info(f"Scale: {args.scale}, HR Patch Size: {args.patch_size}x{args.patch_size}")
 
     # 1. Load Data
-    u_data, v_data, w_data = load_fluid_data(args.data_path, args.t_skip, args.n_skip, sample_limit=args.sample_limit)
-    if u_data is None: exit()
+    logger.info(f"Loading data from {args.data_path}...")
+    if not os.path.exists(args.data_path):
+        logger.error(f"Error: Data file not found at {args.data_path}")
+        exit()
+    try:
+        file = h5py.File(args.data_path, 'r'); dataset = file['fields']
+    except Exception as e:
+        logger.error(f"Error HDF5: {e}"); exit()
+
+    total_samples = dataset.shape[0]
+    if args.sample_limit is None: sample_limit = total_samples
+    else: sample_limit = args.sample_limit # Use the argument directly
+
+    num_time_samples = min(int(sample_limit), int(total_samples / args.t_skip))
+    if num_time_samples == 0 and total_samples > 0: num_time_samples = 1 # Ensure at least one sample if possible
+
+    logger.info(f"Original shape: {dataset.shape}, Loading {num_time_samples} samples (limit:{sample_limit}, t_skip:{args.t_skip}, n_skip:{args.n_skip})...")
+    try:
+        u_data = dataset[::args.t_skip, 0, ::args.n_skip, ::args.n_skip][:num_time_samples]
+        v_data = dataset[::args.t_skip, 1, ::args.n_skip, ::args.n_skip][:num_time_samples]
+        w_data = dataset[::args.t_skip, 2, ::args.n_skip, ::args.n_skip][:num_time_samples]
+    except Exception as e:
+        logger.error(f"Error slicing: {e}"); file.close(); exit()
+    file.close()
+    logger.info(f"Loaded shapes: u:{u_data.shape}, v:{v_data.shape}, w:{w_data.shape}")
+    if u_data.shape[0] == 0: logger.warning("Warning: 0 samples loaded."); exit()
+    u_data, v_data, w_data = u_data.astype(np.float32), v_data.astype(np.float32), w_data.astype(np.float32)
 
     # 2. Split Data
     split_idx = int(0.8 * len(u_data))
     u_train, v_train, w_train = u_data[:split_idx], v_data[:split_idx], w_data[:split_idx]
     u_val, v_val, w_val = u_data[split_idx:], v_data[split_idx:], w_data[split_idx:]
-    print(f"Train samples: {len(u_train)}, Validation samples: {len(u_val)}")
-    if len(u_train) == 0 or len(u_val) == 0: print("Error: Not enough data."); exit()
+    logger.info(f"Train samples: {len(u_train)}, Validation samples: {len(u_val)}")
+    if len(u_train) == 0 or len(u_val) == 0: logger.error("Error: Not enough data."); exit()
 
     # 3. Create Datasets (Cropped Mode Only)
     train_dataset = FluidFlowCroppedDataset(u_train, v_train, w_train,
@@ -309,7 +355,7 @@ def main(args):
 
     # 5. Initialize Model
     model = FNOFluidSR(modes1=args.modes, modes2=args.modes, width=args.width, scale_factor=args.scale).to(device)
-    print(f"FNO Model Parameter Count: {model.count_params()}")
+    logger.info(f"FNO Model Parameter Count: {model.count_params()}")
 
     # 6. Setup Optimizer, Scheduler, Loss (SwinIR style)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
@@ -317,11 +363,10 @@ def main(args):
     criterion = nn.L1Loss().to(device) # Use L1 Loss like SwinIR
 
     # 7. Training Loop (SwinIR style metrics)
-    print(f"Starting training for {args.epochs} epochs...")
+    logger.info(f"Starting training for {args.epochs} epochs...")
     best_val_loss = float('inf')
-    train_losses, val_losses = [], []
-    train_maes, val_maes = [], []
-    train_mses, val_mses = [], []
+    # Store metrics per epoch
+    metrics_history = []
 
     for epoch in range(args.epochs):
         model.train()
@@ -395,34 +440,59 @@ def main(args):
         avg_val_mae = epoch_val_mae / num_val_batches if num_val_batches > 0 else 0
         avg_val_mse = epoch_val_mse / num_val_batches if num_val_batches > 0 else 0
 
-        train_losses.append(avg_train_loss); val_losses.append(avg_val_loss)
-        train_maes.append(avg_train_mae); val_maes.append(avg_val_mae)
-        train_mses.append(avg_train_mse); val_mses.append(avg_val_mse)
+        # Store metrics for this epoch
+        epoch_metrics = {
+            'epoch': epoch + 1,
+            'train_loss': avg_train_loss,
+            'train_mae': avg_train_mae,
+            'train_mse': avg_train_mse,
+            'val_loss': avg_val_loss,
+            'val_mae': avg_val_mae,
+            'val_mse': avg_val_mse,
+        }
+        metrics_history.append(epoch_metrics)
 
         t2 = default_timer()
-        print(f'Epoch [{epoch+1}/{args.epochs}], Time: {t2-t1:.1f}s')
-        print(f'  Train - Loss: {avg_train_loss:.4f}, MAE: {avg_train_mae:.4f}, MSE: {avg_train_mse:.4f}')
-        print(f'  Val   - Loss: {avg_val_loss:.4f}, MAE: {avg_val_mae:.4f}, MSE: {avg_val_mse:.4f}')
+        logger.info(f'Epoch [{epoch+1}/{args.epochs}], Time: {t2-t1:.1f}s')
+        logger.info(f'  Train - Loss: {avg_train_loss:.4f}, MAE: {avg_train_mae:.4f}, MSE: {avg_train_mse:.4f}')
+        logger.info(f'  Val   - Loss: {avg_val_loss:.4f}, MAE: {avg_val_mae:.4f}, MSE: {avg_val_mse:.4f}')
 
         # Save best model based on validation L1 loss
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
-            save_path = f'best_fno_crop_model_s{args.scale}_p{args.patch_size}.pth'
+            save_path = os.path.join(exp_dir, f'best_fno_crop_model_s{args.scale}_p{args.patch_size}.pth')
             torch.save(model.state_dict(), save_path)
-            print(f"Saved best model to {save_path} with Val Loss: {best_val_loss:.4f}")
+            logger.info(f"Saved best model to {save_path} with Val Loss: {best_val_loss:.4f}")
 
     # 8. Final Evaluation & Plotting (SwinIR style)
-    print("\nTraining finished.")
-    load_path = f'best_fno_crop_model_s{args.scale}_p{args.patch_size}.pth'
+    logger.info("\nTraining finished.")
+    load_path = os.path.join(exp_dir, f'best_fno_crop_model_s{args.scale}_p{args.patch_size}.pth')
     if os.path.exists(load_path):
-         print(f"Best model saved at: {load_path}")
-         print(f"Final Best Model Validation L1 Loss: {best_val_loss:.4f}") # Already have best loss
+         logger.info(f"Best model saved at: {load_path}")
+         logger.info(f"Final Best Model Validation L1 Loss: {best_val_loss:.4f}") # Already have best loss
     else:
-        print("Best model file not found. Cannot report final validation loss.")
+        logger.warning("Best model file not found. Cannot report final validation loss.")
 
+    # Save metrics history to JSON
+    metrics_file_path = os.path.join(exp_dir, 'metrics.json')
+    try:
+        with open(metrics_file_path, 'w') as f:
+            json.dump(metrics_history, f, indent=4)
+        logger.info(f"Saved metrics history to {metrics_file_path}")
+    except Exception as e:
+        logger.error(f"Error saving metrics to {metrics_file_path}: {e}")
 
     # Plot Loss Curves
-    loss_plot_path = f'fno_crop_metrics_s{args.scale}_p{args.patch_size}.png'
+    # Extract data for plotting from metrics_history
+    epochs_list = [m['epoch'] for m in metrics_history]
+    train_losses = [m['train_loss'] for m in metrics_history]
+    val_losses = [m['val_loss'] for m in metrics_history]
+    train_maes = [m['train_mae'] for m in metrics_history]
+    val_maes = [m['val_mae'] for m in metrics_history]
+    train_mses = [m['train_mse'] for m in metrics_history]
+    val_mses = [m['val_mse'] for m in metrics_history]
+
+    loss_plot_path = os.path.join(exp_dir, f'fno_crop_metrics_s{args.scale}_p{args.patch_size}.png')
     plt.figure(figsize=(18, 5))
     # L1 Loss Plot
     plt.subplot(1, 3, 1)
@@ -441,22 +511,26 @@ def main(args):
     plt.title('Mean Squared Error'); plt.xlabel('Epoch'); plt.ylabel('MSE'); plt.legend(); plt.grid(True)
     plt.tight_layout()
     plt.savefig(loss_plot_path)
-    print(f"Saved metrics plot to {loss_plot_path}")
+    logger.info(f"Saved metrics plot to {loss_plot_path}")
+    plt.close() # Close plot to avoid display issues
     # plt.show()
 
     # 9. Visualize Results
     if os.path.exists(load_path):
         model.load_state_dict(torch.load(load_path)) # Load best model for viz
-        visualize_results(model, val_loader, device, scale_factor=args.scale,
+        visualize_results(model, val_loader, device, exp_dir, # Pass exp_dir
+                          scale_factor=args.scale,
                           save_prefix=f"fno_crop_viz_s{args.scale}_p{args.patch_size}")
     else:
-        print("Skipping visualization as best model file not found.")
+        logger.warning("Skipping visualization as best model file not found.")
 
-    print("FNO Cropped Fluid Flow script completed.")
+    logger.info("FNO Cropped Fluid Flow script completed.")
 
-if __name__ == "__main__":
+
+# --- Argument Parsing ---
+def parse_args():
     parser = argparse.ArgumentParser(description="FNO for Fluid Flow Super-Resolution (Cropped Patch Mode)")
-    # Args identical to previous fno_fluid.py, except --use_cropping is removed
+    parser.add_argument('--exp_name', type=str, default=DEFAULT_EXP_NAME, help='Name for the experiment directory')
     parser.add_argument('--data_path', type=str, default=DEFAULT_DATA_PATH, help='Path to HDF5 data file')
     parser.add_argument('--sample_limit', type=int, default=DEFAULT_SAMPLE_LIMIT, help='Maximum number of samples to load (0 or None for all)')
     parser.add_argument('--t_skip', type=int, default=DEFAULT_T_SKIP, help='Time downsampling factor')
@@ -471,7 +545,10 @@ if __name__ == "__main__":
     parser.add_argument('--gamma', type=float, default=DEFAULT_GAMMA, help='Scheduler gamma value')
     parser.add_argument('--weight_decay', type=float, default=DEFAULT_WEIGHT_DECAY, help='Adam weight decay')
     parser.add_argument('--patch_size', type=int, default=DEFAULT_PATCH_SIZE, help='HR patch size for cropping (LR patch size = patch_size // scale)')
-
     args = parser.parse_args()
     if args.sample_limit is not None and args.sample_limit <= 0: args.sample_limit = None
+    return args
+
+if __name__ == "__main__":
+    args = parse_args()
     main(args)
