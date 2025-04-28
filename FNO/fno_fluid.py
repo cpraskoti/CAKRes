@@ -10,6 +10,8 @@ Includes option for random cropping and experiment logging.
 import h5py
 import os
 import numpy as np
+import matplotlib
+matplotlib.use('Agg') # Use non-interactive backend BEFORE importing pyplot
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
@@ -49,10 +51,10 @@ N_SKIP = 2         # Spatial downsampling factor for original data loading
 # FNO Model parameters
 SCALE = 4          # Super-resolution factor (LR grid -> HR grid)
 MODES = 16         # Number of Fourier modes
-WIDTH = 64         # Feature width in FNO layers
+WIDTH = 32         # Feature width in FNO layers - Reduced for memory. Start lower if OOM persists.
 
 # Training parameters
-BATCH_SIZE = 64
+BATCH_SIZE = 8    # Reduced for memory. Try 8 or 4 if OOM persists. Adjust LEARNING_RATE if needed.
 LEARNING_RATE = 0.001
 EPOCHS = 50        # Reduced for quicker testing
 STEP_SIZE = 10     # Learning rate scheduler step size
@@ -181,13 +183,14 @@ class SpectralConv2d_new(nn.Module):
 
 # --- FNO Model for Super-Resolution ---
 class FNOFluidSR(nn.Module):
-    def __init__(self, modes1, modes2, width, scale_factor, use_cropping=False):
+    def __init__(self, modes1, modes2, width, scale_factor, use_cropping=False, dropout_rate=0.1):
         super(FNOFluidSR, self).__init__()
         self.modes1 = modes1
         self.modes2 = modes2
         self.width = width
         self.scale_factor = scale_factor
         self.use_cropping = use_cropping
+        self.dropout_rate = dropout_rate # Store dropout rate
 
         # Input channels: 3 (u,v,w) + 2 (grid_x, grid_y) = 5
         self.fc0 = nn.Linear(5, self.width)
@@ -220,6 +223,10 @@ class FNOFluidSR(nn.Module):
         self.fc1 = nn.Linear(self.width, 128)
         self.fc2 = nn.Linear(128, 3) # Output 3 channels
 
+        # Dropout layers (Consider making dropout_rate an argument)
+        # Initialize dropout layer
+        self.dropout = nn.Dropout(self.dropout_rate)
+
     def forward(self, x):
         # x: (batch, H_lr, W_lr, 5)  (u,v,w,x,y)
         batchsize = x.shape[0]
@@ -234,24 +241,28 @@ class FNOFluidSR(nn.Module):
         x2 = self.w0(x)
         x = self.bn0(x1 + x2)
         x = F.gelu(x)
+        x = self.dropout(x) # Dropout after activation
 
         # FNO Block 1
         x1 = self.conv1(x)
         x2 = self.w1(x)
         x = self.bn1(x1 + x2)
         x = F.gelu(x)
+        x = self.dropout(x) # Dropout after activation
 
         # FNO Block 2
         x1 = self.conv2(x)
         x2 = self.w2(x)
         x = self.bn2(x1 + x2)
         x = F.gelu(x)
+        x = self.dropout(x) # Dropout after activation
 
         # FNO Block 3
         x1 = self.conv3(x)
         x2 = self.w3(x)
         x = self.bn3(x1 + x2)
         # x = F.gelu(x) # No activation after last block
+        # No dropout right after last FNO block before upsampling
 
         # Upsample to High Resolution grid
         x = self.upsample(x) # (batch, width, H_hr, W_hr)
@@ -260,6 +271,7 @@ class FNOFluidSR(nn.Module):
         x = x.permute(0, 2, 3, 1) # (batch, H_hr, W_hr, width)
         x = self.fc1(x)
         x = F.gelu(x)
+        x = self.dropout(x) # Dropout after fc1 activation
         x = self.fc2(x) # (batch, H_hr, W_hr, 3) -> (u_hr, v_hr, w_hr)
 
         return x
@@ -272,48 +284,53 @@ class FNOFluidSR(nn.Module):
 
 # --- Data Loading and Preprocessing ---
 def load_fluid_data(filepath, t_skip, n_skip, sample_limit=None):
-    """Load fluid flow data from HDF5 file."""
-    print(f"Loading data from {filepath}...")
+    """Prepares indices for lazy loading from HDF5 file.
+
+    Args:
+        filepath (str): Path to the HDF5 file.
+        t_skip (int): Time downsampling factor.
+        n_skip (int): Spatial downsampling factor (applied in Dataset.__getitem__).
+        sample_limit (int, optional): Maximum number of time samples to consider. Defaults to None (all).
+
+    Returns:
+        tuple: (filepath, list_of_hdf5_indices, hr_shape_after_n_skip, n_skip) or (None, None, None, None) on error.
+    """
+    print(f"Preparing indices from {filepath}...")
     try:
-        file = h5py.File(filepath, 'r')
-        dataset = file['fields']
+        with h5py.File(filepath, 'r') as file: # Open temporarily to get shape and indices
+            dataset = file['fields']
+            original_shape = dataset.shape
+            total_time_samples = original_shape[0]
+
+            if sample_limit is None:
+                sample_limit = total_time_samples
+            else:
+                sample_limit = min(sample_limit, total_time_samples)
+            # Determine the actual HDF5 indices to load later
+            hdf5_indices = list(range(0, total_time_samples, t_skip))
+            if len(hdf5_indices) > sample_limit:
+                 hdf5_indices = hdf5_indices[:sample_limit]
+
+            num_selected_samples = len(hdf5_indices)
+            if num_selected_samples == 0 and total_time_samples > 0:
+                print("Warning: No samples selected with current t_skip and sample_limit.")
+                # Decide if we should proceed with 0 samples or error out
+                # return None, None, None, None # Option: Error out
+
+            # Calculate the HR shape *after* n_skip will be applied
+            hr_h = len(range(0, original_shape[2], n_skip))
+            hr_w = len(range(0, original_shape[3], n_skip))
+            hr_shape_after_n_skip = (hr_h, hr_w)
+
+            print(f"Original data shape: {original_shape}")
+            print(f"Selected {num_selected_samples} time indices (limit: {sample_limit}, t_skip: {t_skip}) for lazy loading.")
+            print(f"Target HR spatial shape after n_skip={n_skip}: {hr_shape_after_n_skip}")
+
+            return filepath, hdf5_indices, hr_shape_after_n_skip, n_skip
+
     except Exception as e:
-        print(f"Error opening or reading HDF5 file: {e}")
-        return None, None, None
-
-    total_samples = dataset.shape[0]
-    if sample_limit is None:
-        sample_limit = total_samples
-
-    num_time_samples = min(int(sample_limit), int(total_samples / t_skip))
-    if num_time_samples == 0 and total_samples > 0:
-         num_time_samples = 1 # Ensure at least one sample if possible
-
-    print(f"Original data shape: {dataset.shape}")
-    print(f"Loading {num_time_samples} time samples (limit: {sample_limit}, t_skip: {t_skip}, n_skip: {n_skip})...")
-
-    # Load the dataset into numpy arrays
-    try:
-        u = dataset[::t_skip, 0, ::n_skip, ::n_skip][:num_time_samples]
-        v = dataset[::t_skip, 1, ::n_skip, ::n_skip][:num_time_samples]
-        w = dataset[::t_skip, 2, ::n_skip, ::n_skip][:num_time_samples]
-    except Exception as e:
-        print(f"Error slicing dataset: {e}")
-        file.close()
-        return None, None, None
-
-    file.close()
-    print(f"Loaded data shapes: u: {u.shape}, v: {v.shape}, w: {w.shape}")
-    if u.shape[0] == 0:
-        print("Warning: Loaded data has 0 samples.")
-        return None, None, None
-
-    # Convert to float32
-    u = u.astype(np.float32)
-    v = v.astype(np.float32)
-    w = w.astype(np.float32)
-
-    return u, v, w
+        print(f"Error accessing or reading HDF5 file metadata: {e}")
+        return None, None, None, None
 
 def get_grid(shape):
     """Generates 2D grid coordinates normalized from 0 to 1.
@@ -335,49 +352,61 @@ def get_grid(shape):
     return torch.cat((gridx, gridy), dim=-1) # Shape (1, size_x, size_y, 2)
 
 class FluidFlowFNODataset(Dataset):
-    def __init__(self, u, v, w, scale_factor, use_cropping=False, patch_size=64):
-        assert u.shape == v.shape == w.shape, "U, V, W must have the same shape"
+    def __init__(self, filepath, hdf5_indices, hr_shape, n_skip, scale_factor, use_cropping=False, patch_size=64):
+        self.filepath = filepath
+        self.hdf5_indices = hdf5_indices
+        self.hr_shape = hr_shape # Shape AFTER n_skip is applied
+        self.n_skip = n_skip
         self.scale_factor = scale_factor
         self.use_cropping = use_cropping
         self.patch_size = patch_size # This is HR patch size
         self.lr_patch_size = patch_size // scale_factor
+
+        self.h5_file = None # Worker-specific file handle
 
         if self.use_cropping and not HAS_BASICSCR:
              raise ImportError("Basicsr library not found. Cannot use cropping. Install with 'pip install basicsr'")
         if self.use_cropping and (patch_size % scale_factor != 0):
             raise ValueError(f"Patch size ({patch_size}) must be divisible by scale_factor ({scale_factor}) for cropping.")
 
-        # Store HR data as numpy arrays initially for potential cropping
-        self.u_hr_np = u
-        self.v_hr_np = v
-        self.w_hr_np = w
-
-        self.num_samples = u.shape[0]
-        self.hr_shape = u.shape[1:] # H, W
+        self.num_samples = len(hdf5_indices)
         self.lr_shape = (self.hr_shape[0] // scale_factor, self.hr_shape[1] // scale_factor)
 
-        # Precompute full LR grid if not cropping (otherwise compute per patch)
+        # Precompute full LR grid if not cropping (needs device later)
         if not self.use_cropping:
-             # Pass only spatial dimensions (H, W) to get_grid
-            self.grid_lr_full = get_grid(self.lr_shape)
-
-        # Store HR data as tensor for non-cropping case
-        if not self.use_cropping:
-             self.hr_data = torch.stack([torch.from_numpy(u), torch.from_numpy(v), torch.from_numpy(w)], dim=-1)
+            self.grid_lr_full = get_grid(self.lr_shape) # (1, H_lr, W_lr, 2)
 
     def __len__(self):
         return self.num_samples
 
     def __getitem__(self, idx):
+        # Open HDF5 file if not already opened by this worker
+        if self.h5_file is None:
+            try:
+                self.h5_file = h5py.File(self.filepath, 'r', swmr=True) # Enable SWMR for multiproc read?
+            except Exception as e:
+                 print(f"WORKER ERROR opening {self.filepath}: {e}")
+                 # Handle error appropriately, maybe return dummy data or raise
+                 raise e # Raising might be better to stop DataLoader
+
+        # Get the actual HDF5 index for the requested sample index
+        hdf5_idx = self.hdf5_indices[idx]
+
+        try:
+            # 1. Load HR data for the single sample from HDF5, applying n_skip
+            # Shape: (3, H_orig, W_orig) -> slice -> (3, H_hr, W_hr)
+            hr_data_raw = self.h5_file['fields'][hdf5_idx, :, ::self.n_skip, ::self.n_skip]
+            # Convert to float32 and permute to (H_hr, W_hr, 3)
+            hr_target_np = hr_data_raw.astype(np.float32).transpose(1, 2, 0)
+        except Exception as e:
+            print(f"WORKER ERROR reading index {idx} (HDF5 index {hdf5_idx}) from {self.filepath}: {e}")
+            # Handle error: return dummy data or raise
+            raise e
+
+        # --- From here, logic is similar but operates on the loaded hr_target_np ---
 
         if self.use_cropping:
-            # Get HR data for the index as numpy array
-            hr_u = self.u_hr_np[idx]
-            hr_v = self.v_hr_np[idx]
-            hr_w = self.w_hr_np[idx]
-            hr_target_np = np.stack([hr_u, hr_v, hr_w], axis=-1) # (H_hr, W_hr, 3)
-
-            # 1. Create full LR image from HR numpy data
+            # 2a. Create full LR image from HR numpy data (needed for cropping reference)
             hr_tensor_temp = torch.from_numpy(hr_target_np).permute(2, 0, 1).unsqueeze(0) # (1, 3, H_hr, W_hr)
             lr_permuted_full = F.interpolate(
                 hr_tensor_temp,
@@ -387,26 +416,25 @@ class FluidFlowFNODataset(Dataset):
             )
             lr_full_np = lr_permuted_full.squeeze(0).permute(1, 2, 0).numpy() # (H_lr, W_lr, 3)
 
-            # 2. Perform paired random crop
+            # 2b. Perform paired random crop
             hr_patch_np, lr_patch_np = paired_random_crop(
                 hr_target_np, lr_full_np, self.patch_size, self.scale_factor
             )
 
-            # 3. Convert cropped patches to tensors
+            # 2c. Convert cropped patches to tensors
             hr_target = torch.from_numpy(hr_patch_np) # (patch_hr, patch_hr, 3)
             lr_data = torch.from_numpy(lr_patch_np)   # (patch_lr, patch_lr, 3)
 
-            # 4. Generate grid for the LR patch - Pass only spatial shape
-            grid_lr_patch = get_grid(lr_data.shape[:2]).squeeze(0) # Get grid (1, patch_lr, patch_lr, 2) -> (patch_lr, patch_lr, 2)
+            # 2d. Generate grid for the LR patch - Pass only spatial shape
+            grid_lr_patch = get_grid(lr_data.shape[:2]).squeeze(0) # (patch_lr, patch_lr, 2)
 
-            # 5. Concatenate LR patch data and grid
+            # 2e. Concatenate LR patch data and grid
             lr_input = torch.cat([lr_data, grid_lr_patch], dim=-1) # (patch_lr, patch_lr, 5)
 
-        else: # Use full images (precomputed HR tensor and grid)
-            # Get precomputed full HR target
-            hr_target = self.hr_data[idx] # (H_hr, W_hr, 3)
+        else: # Use full images
+            hr_target = torch.from_numpy(hr_target_np) # (H_hr, W_hr, 3)
 
-            # Create full LR input by downsampling HR tensor
+            # 2a. Create full LR input by downsampling HR tensor
             hr_permuted = hr_target.permute(2, 0, 1).unsqueeze(0) # (1, 3, H_hr, W_hr)
             lr_permuted = F.interpolate(
                 hr_permuted,
@@ -416,11 +444,22 @@ class FluidFlowFNODataset(Dataset):
             )
             lr_data = lr_permuted.squeeze(0).permute(1, 2, 0) # (H_lr, W_lr, 3)
 
-            # Concatenate LR data with precomputed full LR grid coordinates
-            grid_rep = self.grid_lr_full.squeeze(0) # Get grid (1, H_lr, W_lr, 2) -> (H_lr, W_lr, 2)
+            # 2b. Concatenate LR data with precomputed full LR grid coordinates
+            grid_rep = self.grid_lr_full.squeeze(0) # (H_lr, W_lr, 2)
             lr_input = torch.cat([lr_data, grid_rep], dim=-1) # (H_lr, W_lr, 5)
 
         return {'x': lr_input, 'y': hr_target}
+
+    # Optional: Add a __del__ method to try and close the file handle
+    # Note: __del__ is not guaranteed to be called reliably, especially with workers.
+    # def __del__(self):
+    #     if self.h5_file is not None:
+    #         try:
+    #             self.h5_file.close()
+    #             # print(f"Worker closed HDF5 file: {self.filepath}")
+    #         except Exception as e:
+    #             pass # Ignore errors during cleanup
+
 
 # --- Main Training Script ---
 def main(args):
@@ -450,56 +489,129 @@ def main(args):
         logger.info(f"Patch size (HR): {args.patch_size}x{args.patch_size}")
         logger.info(f"Patch size (LR): {args.patch_size // args.scale}x{args.patch_size // args.scale}")
 
-    # 1. Load Data
-    u_data, v_data, w_data = load_fluid_data(args.data_path, args.t_skip, args.n_skip, sample_limit=args.sample_limit)
-
-    if u_data is None:
-        logger.error("Failed to load data. Exiting.")
+    # --- Data Loading ---
+    logger.info(f"Loading training data from: {args.data_path}")
+    # Load training data indices based on train parameters
+    train_filepath, train_hdf5_indices, hr_shape_after_n_skip, n_skip_loaded = load_fluid_data(
+        args.data_path, args.t_skip, args.n_skip, sample_limit=args.sample_limit
+    )
+    if train_filepath is None or len(train_hdf5_indices) == 0:
+        logger.error("Failed to load training data indices or no training samples selected. Exiting.")
         exit()
+    logger.info(f"Using {len(train_hdf5_indices)} indices for training.")
 
-    # 2. Split Data (80/20 Train/Validation)
-    split_idx = int(0.8 * len(u_data))
-    u_train, v_train, w_train = u_data[:split_idx], v_data[:split_idx], w_data[:split_idx]
-    u_val, v_val, w_val = u_data[split_idx:], v_data[split_idx:], w_data[split_idx:]
+    # Check if a separate validation path is provided
+    if args.val_data_path:
+        logger.info(f"Loading validation data from separate file: {args.val_data_path}")
+        # Load validation data using val_t_skip argument
+        val_filepath, val_hdf5_indices, val_hr_shape, val_n_skip = load_fluid_data(
+            args.val_data_path,
+            t_skip=args.val_t_skip, # Use the new argument here
+            n_skip=args.n_skip,
+            sample_limit=None # Still using all samples from val file by default
+        )
+        if val_filepath is None or len(val_hdf5_indices) == 0:
+            logger.error("Failed to load validation data indices or no validation samples found in the specified file. Exiting.")
+            exit()
 
-    logger.info(f"Train samples: {len(u_train)}, Validation samples: {len(u_val)}")
-    if len(u_train) == 0 or len(u_val) == 0:
-        logger.error("Error: Not enough data for train/validation split. Need at least 2 samples.")
-        exit()
+        # Basic check for compatibility (can be expanded)
+        if hr_shape_after_n_skip != val_hr_shape:
+            logger.warning(f"Training HR shape {hr_shape_after_n_skip} and Validation HR shape {val_hr_shape} differ after n_skip. Ensure model compatibility.")
+        if n_skip_loaded != val_n_skip:
+            # You might want to enforce they are the same or handle this differently
+             logger.warning(f"Training n_skip {n_skip_loaded} and Validation n_skip {val_n_skip} differ. Using training n_skip ({n_skip_loaded}) for both datasets.")
+             # Override val_n_skip for consistency in dataset creation if needed, or error out.
 
-    # 3. Create Datasets
-    train_dataset = FluidFlowFNODataset(u_train, v_train, w_train,
+        logger.info(f"Using {len(val_hdf5_indices)} indices for validation.")
+
+    else:
+        # --- Original Splitting Logic (If no val_data_path) ---
+        logger.info(f"No separate validation file provided. Splitting training data from {args.data_path}.")
+        # Validation uses the same file and indices loaded initially for training must be split
+        val_filepath = train_filepath
+        all_hdf5_indices = train_hdf5_indices # Use the indices loaded (potentially limited by sample_limit)
+        split_idx = int(0.8 * len(all_hdf5_indices))
+        # Re-assign train_hdf5_indices to the first part of the split
+        train_hdf5_indices = all_hdf5_indices[:split_idx]
+        # Assign val_hdf5_indices to the second part
+        val_hdf5_indices = all_hdf5_indices[split_idx:]
+
+        logger.info(f"Total selected indices before split: {len(all_hdf5_indices)}")
+        logger.info(f"Using {len(train_hdf5_indices)} indices for training after split.")
+        logger.info(f"Using {len(val_hdf5_indices)} indices for validation after split.")
+        if len(train_hdf5_indices) == 0 or len(val_hdf5_indices) == 0:
+            logger.error("Error: Not enough data for train/validation split after index selection and potential limiting.")
+            exit()
+
+    # --- Dataset Creation ---
+    # Uses train_filepath, train_hdf5_indices determined above
+    train_dataset = FluidFlowFNODataset(train_filepath, train_hdf5_indices, hr_shape_after_n_skip, n_skip_loaded,
                                         scale_factor=args.scale,
                                         use_cropping=args.use_cropping,
                                         patch_size=args.patch_size)
-    val_dataset = FluidFlowFNODataset(u_val, v_val, w_val,
+    # Uses val_filepath, val_hdf5_indices determined above
+    # Assuming same hr_shape and n_skip for validation dataset creation - adjust if needed
+    val_dataset = FluidFlowFNODataset(val_filepath, val_hdf5_indices, hr_shape_after_n_skip, n_skip_loaded,
                                       scale_factor=args.scale,
                                       use_cropping=args.use_cropping, # Use same mode for validation
                                       patch_size=args.patch_size)
 
-    # 4. Create Normalizer (based on HR training data)
-    # Combine u, v, w for normalization stats
-    y_normalizer_data = torch.stack([
-        torch.from_numpy(u_train),
-        torch.from_numpy(v_train),
-        torch.from_numpy(w_train)
-    ], dim=-1) # Shape (N_train, H_hr, W_hr, 3)
+    # --- Normalizer Calculation (Always use Training Data) ---
+    logger.info("Calculating normalizer statistics on a subset of training data...")
+    # Consider reducing num_norm_samples if memory is extremely tight during startup.
+    num_norm_samples = min(len(train_hdf5_indices), 100) # Base on final train indices length
+    norm_indices_to_load = train_hdf5_indices[:num_norm_samples] # Use indices from training set
+    norm_data_list = []
+    try:
+        # Ensure we load normalizer data from the training file path
+        with h5py.File(train_filepath, 'r') as temp_file: # Use train_filepath
+            for hdf5_idx in norm_indices_to_load:
+                # Load HR data slice, apply n_skip, transpose
+                hr_data_raw = temp_file['fields'][hdf5_idx, :, ::n_skip_loaded, ::n_skip_loaded]
+                hr_target_np = hr_data_raw.astype(np.float32).transpose(1, 2, 0)
+                norm_data_list.append(torch.from_numpy(hr_target_np))
+    except Exception as e:
+        logger.error(f"Failed to load data for normalizer calculation: {e}")
+        exit()
+
+    if not norm_data_list:
+         logger.error("No data loaded for normalizer calculation. Exiting.")
+         exit()
+
+    y_normalizer_data = torch.stack(norm_data_list, dim=0) # Shape (N_norm, H_hr, W_hr, 3)
+    logger.info(f"Normalizer stats calculated from {y_normalizer_data.shape[0]} samples.")
 
     y_normalizer = UnitGaussianNormalizer(y_normalizer_data)
     y_normalizer.to(device)
 
     # 5. Create DataLoaders
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, pin_memory=True)
+    # Set num_workers > 0 to leverage multiprocessing for data loading
+    # Make sure persistent_workers=True if num_workers > 0 and PyTorch >= 1.8 for efficiency
+    # If OOM errors persist, try reducing num_workers, even to 0.
+    num_workers = 4 if device.type == 'cuda' else 0 # Often good to use workers with GPU
+    persistent_workers = (num_workers > 0)
+    logger.info(f"Using {num_workers} DataLoader workers.")
+
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
+                            num_workers=num_workers, pin_memory=True,
+                            persistent_workers=persistent_workers)
+    # Use a separate, potentially smaller batch size for validation/evaluation
+    logger.info(f"Using validation batch size: {args.eval_batch_size}")
+    val_loader = DataLoader(val_dataset, batch_size=args.eval_batch_size, shuffle=False,
+                          num_workers=num_workers, pin_memory=True,
+                          persistent_workers=persistent_workers)
 
     # 6. Initialize Model
-    model = FNOFluidSR(modes1=args.modes, modes2=args.modes, width=args.width, scale_factor=args.scale, use_cropping=args.use_cropping).to(device)
+    model = FNOFluidSR(modes1=args.modes, modes2=args.modes, width=args.width, scale_factor=args.scale, use_cropping=args.use_cropping, dropout_rate=args.dropout_rate).to(device)
     logger.info(f"FNO Model Parameter Count: {model.count_params()}")
+    logger.info(f"Using dropout rate: {args.dropout_rate}") # Log the rate
 
     # 7. Setup Optimizer, Scheduler, Loss
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=args.gamma)
     myloss = LpLoss(size_average=False) # Use LpLoss for evaluation metric
+    # Consider using Mixed Precision Training (torch.cuda.amp) for further memory savings
+    # scaler = torch.cuda.amp.GradScaler() # Requires changes in training loop
 
     # 8. Training Loop
     logger.info(f"Starting training for {args.epochs} epochs...")
@@ -520,11 +632,15 @@ def main(args):
 
             optimizer.zero_grad()
             out_norm = model(x) # Model outputs normalized prediction
+            # Add torch.cuda.amp.autocast() context manager here if using mixed precision
+            # with torch.cuda.amp.autocast():
+            #    out_norm = model(x)
 
             # Calculate loss on normalized data
             loss = F.mse_loss(out_norm.view(out_norm.size(0), -1), y_norm.view(y_norm.size(0), -1), reduction='mean')
-            loss.backward()
-            optimizer.step()
+            loss.backward() # Use scaler.scale(loss).backward() with mixed precision
+            optimizer.step() # Use scaler.step(optimizer); scaler.update() with mixed precision
+            # Consider adding torch.cuda.empty_cache() here if memory fragmentation is suspected (may slow down training)
 
             # Calculate L2 error on unnormalized data for tracking progress (optional)
             with torch.no_grad():
@@ -592,6 +708,9 @@ def main(args):
         model.load_state_dict(torch.load(load_path))
         model.eval()
         final_val_l2 = 0.0
+        # Clear cache before final evaluation
+        logger.info("Clearing CUDA cache before final evaluation...")
+        torch.cuda.empty_cache()
         with torch.no_grad():
             for batch in val_loader:
                 x = batch['x'].to(device)
@@ -642,6 +761,9 @@ def main(args):
     logger.info("Visualizing results for a few validation samples (showing patches if cropping)...")
     model.eval()
     num_viz_samples = min(3, len(val_dataset)) # Visualize fewer if dataset is small
+    # Clear cache before visualization
+    logger.info("Clearing CUDA cache before visualization...")
+    torch.cuda.empty_cache()
     if num_viz_samples == 0:
         logger.warning("No validation samples to visualize.")
     else:
@@ -722,19 +844,23 @@ def parse_args():
     parser.add_argument('--exp_name', type=str, default=DEFAULT_EXP_NAME, help='Name for the experiment directory')
 
     # Data Args
-    parser.add_argument('--data_path', type=str, default=DATA_PATH, help='Path to HDF5 data file')
-    parser.add_argument('--sample_limit', type=int, default=SAMPLE_LIMIT, help='Maximum number of samples to load (None for all)')
-    parser.add_argument('--t_skip', type=int, default=T_SKIP, help='Time downsampling factor during loading')
-    parser.add_argument('--n_skip', type=int, default=N_SKIP, help='Spatial downsampling factor during loading')
+    parser.add_argument('--data_path', type=str, default=DATA_PATH, help='Path to HDF5 data file for training')
+    parser.add_argument('--val_data_path', type=str, default=None, help='Optional path to a separate HDF5 file for validation')
+    parser.add_argument('--sample_limit', type=int, default=SAMPLE_LIMIT, help='Maximum number of samples to load from training data (None for all)')
+    parser.add_argument('--t_skip', type=int, default=T_SKIP, help='Time downsampling factor during training data loading')
+    parser.add_argument('--val_t_skip', type=int, default=T_SKIP, help='Time downsampling factor during validation data loading (defaults to training t_skip)')
+    parser.add_argument('--n_skip', type=int, default=N_SKIP, help='Spatial downsampling factor during loading (applied to both train and val)')
 
     # Model Args
     parser.add_argument('--scale', type=int, default=SCALE, help='Super-resolution factor')
     parser.add_argument('--modes', type=int, default=MODES, help='Number of Fourier modes')
     parser.add_argument('--width', type=int, default=WIDTH, help='Feature width in FNO')
+    parser.add_argument('--dropout_rate', type=float, default=0.1, help='Dropout rate for regularization')
 
     # Training Args
     parser.add_argument('--epochs', type=int, default=EPOCHS, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=BATCH_SIZE, help='Training batch size')
+    parser.add_argument('--eval_batch_size', type=int, default=8, help='Batch size for validation and visualization (default: 1)')
     parser.add_argument('--lr', type=float, default=LEARNING_RATE, dest='learning_rate', help='Learning rate')
     parser.add_argument('--step_size', type=int, default=STEP_SIZE, help='Scheduler step size')
     parser.add_argument('--gamma', type=float, default=GAMMA, help='Scheduler gamma value')
