@@ -51,10 +51,8 @@ STEP_SIZE = 10     # Learning rate scheduler step size
 GAMMA = 0.5        # Learning rate scheduler gamma
 WEIGHT_DECAY = 1e-4
 
-# Experiment Name
-DEFAULT_EXP_NAME = 'fno_fluid_exp' # Default experiment name
+DEFAULT_EXP_NAME = 'fno_fluid_exp'
 
-# Set random seeds for reproducibility
 torch.manual_seed(0)
 np.random.seed(0)
 
@@ -814,28 +812,19 @@ def main(args):
 
     logger.info("FNO Fluid Flow script completed.")
 
-# --- Argument Parsing ---
 def parse_args():
     parser = argparse.ArgumentParser(description="FNO for Fluid Flow Super-Resolution")
-
-    # Experiment Args
     parser.add_argument('--exp_name', type=str, default=DEFAULT_EXP_NAME, help='Name for the experiment directory')
-
-    # Data Args
     parser.add_argument('--data_path', type=str, default=DATA_PATH, help='Path to HDF5 data file for training')
     parser.add_argument('--val_data_path', type=str, default=None, help='Optional path to a separate HDF5 file for validation')
     parser.add_argument('--sample_limit', type=int, default=SAMPLE_LIMIT, help='Maximum number of samples to load from training data (None for all)')
     parser.add_argument('--t_skip', type=int, default=T_SKIP, help='Time downsampling factor during training data loading')
     parser.add_argument('--val_t_skip', type=int, default=T_SKIP, help='Time downsampling factor during validation data loading (defaults to training t_skip)')
     parser.add_argument('--n_skip', type=int, default=N_SKIP, help='Spatial downsampling factor during loading (applied to both train and val)')
-
-    # Model Args
     parser.add_argument('--scale', type=int, default=SCALE, help='Super-resolution factor')
     parser.add_argument('--modes', type=int, default=MODES, help='Number of Fourier modes')
     parser.add_argument('--width', type=int, default=WIDTH, help='Feature width in FNO')
     parser.add_argument('--dropout_rate', type=float, default=0.1, help='Dropout rate for regularization')
-
-    # Training Args
     parser.add_argument('--epochs', type=int, default=EPOCHS, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=BATCH_SIZE, help='Training batch size')
     parser.add_argument('--eval_batch_size', type=int, default=8, help='Batch size for validation and visualization (default: 1)')
@@ -843,18 +832,12 @@ def parse_args():
     parser.add_argument('--step_size', type=int, default=STEP_SIZE, help='Scheduler step size')
     parser.add_argument('--gamma', type=float, default=GAMMA, help='Scheduler gamma value')
     parser.add_argument('--weight_decay', type=float, default=WEIGHT_DECAY, help='Adam weight decay')
-
-    # Cropping Args
     parser.add_argument('--use_cropping', action='store_true', help='Enable paired random cropping')
     parser.add_argument('--patch_size', type=int, default=64, help='HR patch size for cropping (LR patch size = patch_size // scale)')
-
-    # Early Stopping Args
     parser.add_argument('--early_stopping_patience', type=int, default=0, help='Number of epochs to wait for improvement before stopping (0 or less to disable)')
     parser.add_argument('--early_stopping_delta', type=float, default=0.0, help='Minimum change in validation loss to qualify as improvement')
-
     args = parser.parse_args()
 
-    # Handle None for sample_limit
     if args.sample_limit is not None and args.sample_limit <= 0:
         args.sample_limit = None
 
