@@ -27,8 +27,8 @@ We might use [this benchmark](https://arxiv.org/abs/2306.14070).
 
 The dataset are available [here](https://drive.google.com/drive/folders/17CK5aiOUJVVLuuEH418aw_RKAD7t_821?usp=drive_link). Use your UT Email Adderss to access it.
 
-
-### Create Virtual environenment
+## Creating virtual environment
+### Create conda or any other virtual environenment
 ```conda create -n cakres python=3.11```
 ### Activate Environment
 ```conda activate cakeres```
