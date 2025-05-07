@@ -423,7 +423,7 @@ def main(args):
         logger.info(f"Patch size (HR): {args.patch_size}x{args.patch_size}")
         logger.info(f"Patch size (LR): {args.patch_size // args.scale}x{args.patch_size // args.scale}")
 
-    # --- Data Loading ---
+    # Data Loading ===
     logger.info(f"Loading training data from: {args.data_path}")
     # Load training data indices based on train parameters
     train_filepath, train_hdf5_indices, hr_shape_after_n_skip, n_skip_loaded = load_fluid_data(
@@ -434,7 +434,6 @@ def main(args):
         exit()
     logger.info(f"Using {len(train_hdf5_indices)} indices for training.")
 
-    # Check if a separate validation path is provided
     if args.val_data_path:
         logger.info(f"Loading validation data from separate file: {args.val_data_path}")
         # Load validation data using val_t_skip argument
@@ -448,7 +447,6 @@ def main(args):
             logger.error("Failed to load validation data indices or no validation samples found in the specified file. Exiting.")
             exit()
 
-        # Basic check for compatibility (can be expanded)
         if hr_shape_after_n_skip != val_hr_shape:
             logger.warning(f"Training HR shape {hr_shape_after_n_skip} and Validation HR shape {val_hr_shape} differ after n_skip. Ensure model compatibility.")
         if n_skip_loaded != val_n_skip:
@@ -478,15 +476,13 @@ def main(args):
                                         scale_factor=args.scale,
                                         use_cropping=args.use_cropping,
                                         patch_size=args.patch_size)
-    # Uses val_filepath, val_hdf5_indices determined above
-    # Assuming same hr_shape and n_skip for validation dataset creation - adjust if needed
     val_dataset = FluidFlowFNODataset(val_filepath, val_hdf5_indices, hr_shape_after_n_skip, n_skip_loaded,
                                       scale_factor=args.scale,
                                       use_cropping=args.use_cropping, # Use same mode for validation
                                       patch_size=args.patch_size)
 
     logger.info("Calculating normalizer statistics on a subset of training data...")
-    # Consider reducing num_norm_samples if memory is extremely tight during startup.
+    # Consider reducing num_norm_samples if memory is extremely tight during startup ===
     num_norm_samples = min(len(train_hdf5_indices), 100) # Base on final train indices length
     norm_indices_to_load = train_hdf5_indices[:num_norm_samples] # Use indices from training set
     norm_data_list = []
@@ -510,10 +506,7 @@ def main(args):
     logger.info(f"Normalizer stats calculated from {y_normalizer_data.shape[0]} samples.")
 
     y_normalizer = UnitGaussianNormalizer(y_normalizer_data)
-    # 5. Create DataLoaders
-    # Set num_workers > 0 to leverage multiprocessing for data loading
-    # Make sure persistent_workers=True if num_workers > 0 and PyTorch >= 1.8 for efficiency
-    # If OOM errors persist, try reducing num_workers, even to 0.
+
     num_workers = 4 if device.type == 'cuda' else 0 # Often good to use workers with GPU
     persistent_workers = (num_workers > 0)
     logger.info(f"Using {num_workers} DataLoader workers.")
@@ -527,19 +520,14 @@ def main(args):
                           num_workers=num_workers, pin_memory=True,
                           persistent_workers=persistent_workers)
 
-    # 6. Initialize Model
     model = FNOFluidSR(modes1=args.modes, modes2=args.modes, width=args.width, scale_factor=args.scale, use_cropping=args.use_cropping, dropout_rate=args.dropout_rate).to(device)
     logger.info(f"FNO Model Parameter Count: {model.count_params()}")
     logger.info(f"Using dropout rate: {args.dropout_rate}") # Log the rate
 
-    # 7. Setup Optimizer, Scheduler, Loss
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=args.gamma)
     myloss = LpLoss(size_average=False) # Use LpLoss for evaluation metric
-    # Consider using Mixed Precision Training (torch.cuda.amp) for further memory savings
-    # scaler = torch.cuda.amp.GradScaler() # Requires changes in training loop
 
-    # 8. Training Loop
     logger.info(f"Starting training for {args.epochs} epochs...")
     best_val_loss = float('inf')
     metrics_history = [] # Store metrics per epoch
@@ -558,17 +546,12 @@ def main(args):
 
             optimizer.zero_grad()
             out_norm = model(x) # Model outputs normalized prediction
-            # Add torch.cuda.amp.autocast() context manager here if using mixed precision
-            # with torch.cuda.amp.autocast():
-            #    out_norm = model(x)
 
             # Calculate loss on normalized data
             loss = F.mse_loss(out_norm.view(out_norm.size(0), -1), y_norm.view(y_norm.size(0), -1), reduction='mean')
             loss.backward() # Use scaler.scale(loss).backward() with mixed precision
             optimizer.step() # Use scaler.step(optimizer); scaler.update() with mixed precision
-            # Consider adding torch.cuda.empty_cache() here if memory fragmentation is suspected (may slow down training)
 
-            # Calculate L2 error on unnormalized data for tracking progress (optional)
             with torch.no_grad():
                  out = y_normalizer.decode(out_norm)
                  train_l2 += myloss(out.view(out.size(0), -1), y.view(y.size(0), -1)).item()
@@ -622,7 +605,7 @@ def main(args):
             logger.info(f"Early stopping triggered after {epoch + 1} epochs due to no improvement for {args.early_stopping_patience} consecutive epochs.")
             break # Exit the training loop
 
-    # 9. Final Evaluation (Optional)
+    #  Evaluation
     logger.info("\nTraining finished. Loading best model...")
     model_filename = f'best_fno_fluid_model_s{args.scale}'
     if args.use_cropping:
@@ -649,7 +632,7 @@ def main(args):
     else:
         logger.warning(f"Best model file not found at {load_path}. Skipping final evaluation.")
 
-    # Save metrics history to JSON
+    # Save metrics
     metrics_file_path = os.path.join(exp_dir, 'metrics.json')
     try:
         with open(metrics_file_path, 'w') as f:
@@ -658,7 +641,7 @@ def main(args):
     except Exception as e:
         logger.error(f"Error saving metrics to {metrics_file_path}: {e}")
 
-    # 10. Plot Loss Curves (Optional)
+    # Plot Loss Curves
     # Extract data for plotting from metrics_history
     epochs_list = [m['epoch'] for m in metrics_history]
     train_losses = [m['train_l2'] for m in metrics_history]
@@ -683,11 +666,10 @@ def main(args):
     logger.info(f"Saved loss plot to {loss_plot_path}")
     plt.close() # Close plot to avoid display issues
 
-    # 11. Visualize Results (Optional)
+    # Visualize Results
     logger.info("Visualizing results for a few validation samples (showing patches if cropping)...")
     model.eval()
     num_viz_samples = min(3, len(val_dataset)) # Visualize fewer if dataset is small
-    # Clear cache before visualization
     logger.info("Clearing CUDA cache before visualization...")
     torch.cuda.empty_cache()
     if num_viz_samples == 0:
