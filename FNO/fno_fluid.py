@@ -438,16 +438,6 @@ class FluidFlowFNODataset(Dataset):
 
         return {'x': lr_input, 'y': hr_target}
 
-    # Optional: Add a __del__ method to try and close the file handle
-    # Note: __del__ is not guaranteed to be called reliably, especially with workers.
-    # def __del__(self):
-    #     if self.h5_file is not None:
-    #         try:
-    #             self.h5_file.close()
-    #             # print(f"Worker closed HDF5 file: {self.filepath}")
-    #         except Exception as e:
-    #             pass # Ignore errors during cleanup
-
 
 # --- Main Training Script ---
 def main(args):
