@@ -32,7 +32,6 @@ except ImportError:
     mean_absolute_error = None
 
 # Data parameters
-# TODO: Adjust this path
 DATA_PATH = "../CAKRes/DatasetRe16k/valid/nskt_Re16000-003.h5" # Or the path to your HDF5 file
 SAMPLE_LIMIT = 100 # Use a subset of samples for faster testing, None for all
 T_SKIP = 5         # Time downsampling factor
@@ -56,7 +55,6 @@ DEFAULT_EXP_NAME = 'fno_fluid_exp'
 torch.manual_seed(0)
 np.random.seed(0)
 
-# Loss function
 class LpLoss(object):
     def __init__(self, d=2, p=2, size_average=True, reduction=True):
         super(LpLoss, self).__init__()
@@ -93,7 +91,6 @@ class LpLoss(object):
     def __call__(self, x, y):
         return self.rel(x, y)
 
-# Normalization
 class UnitGaussianNormalizer(object):
     def __init__(self, x, eps=0.00001):
         super(UnitGaussianNormalizer, self).__init__()
@@ -128,7 +125,6 @@ class UnitGaussianNormalizer(object):
         self.std = self.std.to(device)
         return self
 
-# Complex multiplication (updated for torch.fft)
 def compl_mul2d_new(a, b):
     # a: (batch, in_channel, H, W) complex
     # b: (in_channel, out_channel, H, W) complex
@@ -136,7 +132,6 @@ def compl_mul2d_new(a, b):
     op = partial(torch.einsum, "bixy,ioxy->boxy")
     return op(a, b)
 
-# --- FNO Components (Updated for torch.fft) ---
 class SpectralConv2d_new(nn.Module):
     def __init__(self, in_channels, out_channels, modes1, modes2):
         super(SpectralConv2d_new, self).__init__()
@@ -315,7 +310,6 @@ def load_fluid_data(filepath, t_skip, n_skip, sample_limit=None):
             return filepath, hdf5_indices, hr_shape_after_n_skip, n_skip
 
     except Exception as e:
-        print(f"Error accessing or reading HDF5 file metadata: {e}")
         return None, None, None, None
 
 def get_grid(shape):
@@ -358,7 +352,6 @@ class FluidFlowFNODataset(Dataset):
         self.num_samples = len(hdf5_indices)
         self.lr_shape = (self.hr_shape[0] // scale_factor, self.hr_shape[1] // scale_factor)
 
-        # Precompute full LR grid if not cropping (needs device later)
         if not self.use_cropping:
             self.grid_lr_full = get_grid(self.lr_shape) # (1, H_lr, W_lr, 2)
 
@@ -366,7 +359,6 @@ class FluidFlowFNODataset(Dataset):
         return self.num_samples
 
     def __getitem__(self, idx):
-        # Open HDF5 file if not already opened by this worker
         if self.h5_file is None:
             try:
                 self.h5_file = h5py.File(self.filepath, 'r', swmr=True) # Enable SWMR for multiproc read?
@@ -375,7 +367,6 @@ class FluidFlowFNODataset(Dataset):
                  # Handle error appropriately, maybe return dummy data or raise
                  raise e # Raising might be better to stop DataLoader
 
-        # Get the actual HDF5 index for the requested sample index
         hdf5_idx = self.hdf5_indices[idx]
 
         try:
@@ -385,11 +376,7 @@ class FluidFlowFNODataset(Dataset):
             # Convert to float32 and permute to (H_hr, W_hr, 3)
             hr_target_np = hr_data_raw.astype(np.float32).transpose(1, 2, 0)
         except Exception as e:
-            print(f"WORKER ERROR reading index {idx} (HDF5 index {hdf5_idx}) from {self.filepath}: {e}")
-            # Handle error: return dummy data or raise
             raise e
-
-        # --- From here, logic is similar but operates on the loaded hr_target_np ---
 
         if self.use_cropping:
             # 2a. Create full LR image from HR numpy data (needed for cropping reference)
@@ -419,8 +406,6 @@ class FluidFlowFNODataset(Dataset):
 
         else: # Use full images
             hr_target = torch.from_numpy(hr_target_np) # (H_hr, W_hr, 3)
-
-            # 2a. Create full LR input by downsampling HR tensor
             hr_permuted = hr_target.permute(2, 0, 1).unsqueeze(0) # (1, 3, H_hr, W_hr)
             lr_permuted = F.interpolate(
                 hr_permuted,
@@ -429,15 +414,12 @@ class FluidFlowFNODataset(Dataset):
                 align_corners=False
             )
             lr_data = lr_permuted.squeeze(0).permute(1, 2, 0) # (H_lr, W_lr, 3)
-
-            # 2b. Concatenate LR data with precomputed full LR grid coordinates
             grid_rep = self.grid_lr_full.squeeze(0) # (H_lr, W_lr, 2)
             lr_input = torch.cat([lr_data, grid_rep], dim=-1) # (H_lr, W_lr, 5)
 
         return {'x': lr_input, 'y': hr_target}
 
 
-# --- Main Training Script ---
 def main(args):
     # === Experiment Setup ===
     exp_dir = os.path.join("experiments", args.exp_name)
@@ -501,15 +483,11 @@ def main(args):
         logger.info(f"Using {len(val_hdf5_indices)} indices for validation.")
 
     else:
-        # --- Original Splitting Logic (If no val_data_path) ---
         logger.info(f"No separate validation file provided. Splitting training data from {args.data_path}.")
-        # Validation uses the same file and indices loaded initially for training must be split
         val_filepath = train_filepath
         all_hdf5_indices = train_hdf5_indices # Use the indices loaded (potentially limited by sample_limit)
         split_idx = int(0.8 * len(all_hdf5_indices))
-        # Re-assign train_hdf5_indices to the first part of the split
         train_hdf5_indices = all_hdf5_indices[:split_idx]
-        # Assign val_hdf5_indices to the second part
         val_hdf5_indices = all_hdf5_indices[split_idx:]
 
         logger.info(f"Total selected indices before split: {len(all_hdf5_indices)}")
@@ -519,7 +497,6 @@ def main(args):
             logger.error("Error: Not enough data for train/validation split after index selection and potential limiting.")
             exit()
 
-    # --- Dataset Creation ---
     # Uses train_filepath, train_hdf5_indices determined above
     train_dataset = FluidFlowFNODataset(train_filepath, train_hdf5_indices, hr_shape_after_n_skip, n_skip_loaded,
                                         scale_factor=args.scale,
@@ -532,7 +509,6 @@ def main(args):
                                       use_cropping=args.use_cropping, # Use same mode for validation
                                       patch_size=args.patch_size)
 
-    # --- Normalizer Calculation (Always use Training Data) ---
     logger.info("Calculating normalizer statistics on a subset of training data...")
     # Consider reducing num_norm_samples if memory is extremely tight during startup.
     num_norm_samples = min(len(train_hdf5_indices), 100) # Base on final train indices length
@@ -558,8 +534,6 @@ def main(args):
     logger.info(f"Normalizer stats calculated from {y_normalizer_data.shape[0]} samples.")
 
     y_normalizer = UnitGaussianNormalizer(y_normalizer_data)
-    y_normalizer.to(device)
-
     # 5. Create DataLoaders
     # Set num_workers > 0 to leverage multiprocessing for data loading
     # Make sure persistent_workers=True if num_workers > 0 and PyTorch >= 1.8 for efficiency
