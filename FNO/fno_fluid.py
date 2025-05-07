@@ -265,18 +265,6 @@ class FNOFluidSR(nn.Module):
 
 # --- Data Loading and Preprocessing ---
 def load_fluid_data(filepath, t_skip, n_skip, sample_limit=None):
-    """Prepares indices for lazy loading from HDF5 file.
-
-    Args:
-        filepath (str): Path to the HDF5 file.
-        t_skip (int): Time downsampling factor.
-        n_skip (int): Spatial downsampling factor (applied in Dataset.__getitem__).
-        sample_limit (int, optional): Maximum number of time samples to consider. Defaults to None (all).
-
-    Returns:
-        tuple: (filepath, list_of_hdf5_indices, hr_shape_after_n_skip, n_skip) or (None, None, None, None) on error.
-    """
-    print(f"Preparing indices from {filepath}...")
     try:
         with h5py.File(filepath, 'r') as file: # Open temporarily to get shape and indices
             dataset = file['fields']
@@ -313,14 +301,6 @@ def load_fluid_data(filepath, t_skip, n_skip, sample_limit=None):
         return None, None, None, None
 
 def get_grid(shape):
-    """Generates 2D grid coordinates normalized from 0 to 1.
-
-    Args:
-        shape: Tuple containing spatial dimensions (size_x, size_y).
-
-    Returns:
-        Tensor of shape (1, size_x, size_y, 2).
-    """
     size_x, size_y = shape[-2], shape[-1] # Expects (H, W) or (B, H, W)
 
     gridx = torch.linspace(0, 1, size_x, dtype=torch.float)
