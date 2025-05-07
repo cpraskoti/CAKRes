@@ -1,0 +1,10 @@
+basicsr==1.4.2
+einops==0.8.1
+h5py==3.13.0
+matplotlib==3.10.1
+nvidia-cufile-cu12==1.11.1.6
+nvidia-cusparselt-cu12==0.6.2
+pip==25.0
+piq==0.8.0
+scikit-learn==1.6.1
+wheel==0.45.1
