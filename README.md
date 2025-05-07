@@ -31,7 +31,7 @@ The dataset are available [here](https://drive.google.com/drive/folders/17CK5aiO
 ### Create conda or any other virtual environenment
 ```conda create -n cakres python=3.11```
 ### Activate Environment
-```conda activate cakeres```
+```conda activate cakres```
 
 ### Install dependencies
 ```pip install -r requirements.txt```
