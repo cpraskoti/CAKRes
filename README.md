@@ -27,8 +27,6 @@ We might use [this benchmark](https://arxiv.org/abs/2306.14070).
 
 The dataset are available [here](https://drive.google.com/drive/folders/17CK5aiOUJVVLuuEH418aw_RKAD7t_821?usp=drive_link). Use your UT Email Adderss to access it.
 
-# FNO for Fluid Flow Super-Resolution
-This project implements Fourier Neural Operators (FNO) for super-resolving fluid flow data.
 
 ### Create Virtual environenment
 ```conda create -n cakres python=3.11```
