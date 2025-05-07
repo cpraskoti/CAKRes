@@ -1,16 +1,14 @@
 # FNO for Fluid Flow Super-Resolution
-
 This project implements Fourier Neural Operators (FNO) for super-resolving fluid flow data.
 
 ## Dependencies
-
 *   Python 3.x
 *   PyTorch
 *   NumPy
 *   h5py
 *   Matplotlib
 *   scikit-learn
-
+*   basicsr
 ## Install Dependencies
 Install dependencies using pip:
 ```
