@@ -19,7 +19,6 @@ import csv  # For saving metrics
 from datetime import datetime # For timestamping experiments
 import logging
 
-# Try to import cropping function (optional dependency if not cropping)
 try:
     from basicsr.data.transforms import paired_random_crop
     from basicsr.utils.img_util import tensor2img # For visualization
@@ -32,7 +31,6 @@ except ImportError:
     mean_squared_error = None
     mean_absolute_error = None
 
-# --- Configuration ---
 # Data parameters
 # TODO: Adjust this path
 DATA_PATH = "../CAKRes/DatasetRe16k/valid/nskt_Re16000-003.h5" # Or the path to your HDF5 file
