@@ -104,7 +104,6 @@ class UnitGaussianNormalizer(object):
         return x
 
     def decode(self, x, sample_idx=None):
-        # Consistently use overall stats for decoding in this context
         std = self.std + self.eps
         mean = self.mean
         x = (x * std) + mean
@@ -159,7 +158,7 @@ class SpectralConv2d_new(nn.Module):
         x = torch.fft.irfft2(out_ft, s=(x.size(-2), x.size(-1)), norm='ortho') # (batch, out_channel, H, W)
         return x
 
-# --- FNO Model for Super-Resolution ---
+# FNO Model for Super-Resolution
 class FNOFluidSR(nn.Module):
     def __init__(self, modes1, modes2, width, scale_factor, use_cropping=False, dropout_rate=0.1):
         super(FNOFluidSR, self).__init__()
