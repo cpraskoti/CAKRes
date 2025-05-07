@@ -126,9 +126,6 @@ class UnitGaussianNormalizer(object):
         return self
 
 def compl_mul2d_new(a, b):
-    # a: (batch, in_channel, H, W) complex
-    # b: (in_channel, out_channel, H, W) complex
-    # returns: (batch, out_channel, H, W) complex
     op = partial(torch.einsum, "bixy,ioxy->boxy")
     return op(a, b)
 
