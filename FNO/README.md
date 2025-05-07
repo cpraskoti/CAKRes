@@ -33,13 +33,10 @@ results will be saved in a directory structure like this:
 
 ```
 experiments/
-└── <exp_name>/              # Directory named after your --exp_name argument
+└── <exp_name>/              # Directory named from --exp_name argument
     ├── output.log           # Console output and logs
-    ├── metrics.json         # Training/validation metrics per epoch (Loss, MAE, MSE)
-    ├── best_fno_crop_model_s<scale>_p<patch_size>.pth  # Best model checkpoint (cropped script)
-    ├── best_fno_model_s<scale>.pth   # Best model checkpoint (full image script - assumed name)
-    ├── fno_crop_metrics_s<scale>_p<patch_size>.png # Plot of training/validation metrics (cropped)
-    ├── fno_metrics_s<scale>.png    # Plot of training/validation metrics (full image - assumed name)
-    └── fno_crop_viz_s<scale>_p<patch_size>_*.png # Visualization comparison images (cropped)
-    └── fno_viz_s<scale>_*.png     # Visualization comparison images (full image - assumed name)
+    ├── metrics.json         # Training/validation metrics
+    ├── best_fno_model_s<scale>.pth   # Best model checkpoint 
+    ├── fno_metrics_s<scale>.png    # Plot of training/validation metrics
+    └── fno_crop_viz_s<scale>_p<patch_size>_*.png # Visualization comparison images
 ```
