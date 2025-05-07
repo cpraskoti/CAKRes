@@ -46,5 +46,3 @@ experiments/
     └── fno_crop_viz_s<scale>_p<patch_size>_*.png # Visualization comparison images (cropped)
     └── fno_viz_s<scale>_*.png     # Visualization comparison images (full image - assumed name)
 ```
-
-Replace `<exp_name>`, `<scale>`, and `<patch_size>` with the values used during the run.
