@@ -42,7 +42,7 @@ The dataset are available [here](https://drive.google.com/drive/folders/17CK5aiO
 ```bash
 python FNO/fno_fluid.py \
     --data_path path/to/your/data.h5 \
-    --exp_name my_full_image_experiment \
+    --exp_name experiement_name \
     --scale 4 \
     --epochs 50 \
     --batch_size 4 \
@@ -59,6 +59,6 @@ experiments/
     ├── output.log           # Console output and logs
     ├── metrics.json         # Training/validation metrics
     ├── best_fno_model_s<scale>.pth   # Best model checkpoint 
-    ├── fno_metrics_s<scale>.png    # Plot of training/validation metrics
+    ├── fno_metrics_s<scale>.png    # Plot for training and validation loss
     └── fno_crop_viz_s<scale>_p<patch_size>_*.png # Visualization comparison images
 ```
