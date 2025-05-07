@@ -12,16 +12,13 @@ This project implements Fourier Neural Operators (FNO) for super-resolving fluid
 *   scikit-learn
 *   basicsr (Required for `fno_fluid_cropped.py`)
 
+## Install Dependencies
 Install dependencies using pip:
-```bash
+```
 pip install torch numpy h5py matplotlib scikit-learn basicsr
 ```
 
-### Running `fno_fluid.py` (Full Image - Assuming similar structure)
-
-*(Note: This assumes `fno_fluid.py` has been similarly modified for experiment logging. If not, the `--exp_name` argument won't work until it is updated.)*
-
-To run the full-image FNO training:
+### Running `fno_fluid.py`
 
 ```bash
 python FNO/fno_fluid.py \
@@ -31,12 +28,11 @@ python FNO/fno_fluid.py \
     --epochs 50 \
     --batch_size 4 \
     --lr 0.001
-    # Add other arguments as needed
 ```
 
 ## Experiment Output
 
-After running an experiment, the results will be saved in a directory structure like this:
+results will be saved in a directory structure like this:
 
 ```
 experiments/
