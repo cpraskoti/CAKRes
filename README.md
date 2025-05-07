@@ -37,11 +37,12 @@ The dataset are available [here](https://drive.google.com/drive/folders/17CK5aiO
 ```pip install -r requirements.txt```
 
 ## Running experiments
-### Running `fno_fluid.py`
+### Running FNO Training
 
 ```bash
 python FNO/fno_fluid.py \
-    --data_path path/to/your/data.h5 \
+    --data_path path/to/your/training/data.h5 \
+    --val_data_path path/to/your/validation/data \
     --exp_name experiement_name \
     --scale 4 \
     --epochs 50 \
