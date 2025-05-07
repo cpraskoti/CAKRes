@@ -9,6 +9,7 @@ This project implements Fourier Neural Operators (FNO) for super-resolving fluid
 ### Install dependencies
 ```pip install -r requirements.txt```
 
+## Running FNO experiments
 ### Running `fno_fluid.py`
 
 ```bash
@@ -21,7 +22,7 @@ python FNO/fno_fluid.py \
     --lr 0.001
 ```
 
-## Experiment Output
+### Experiment Output
 
 results will be saved in a directory structure like this:
 
