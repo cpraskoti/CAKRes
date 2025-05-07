@@ -1,7 +1,4 @@
-# -*- coding: utf-8 -*-
 """
-fno_fluid.py
-
 Applies Fourier Neural Operator (FNO) to fluid flow super-resolution.
 Adapted from fourier_2d.py and swinir_fluid.py.
 Includes option for random cropping and experiment logging.
@@ -67,8 +64,6 @@ DEFAULT_EXP_NAME = 'fno_fluid_exp' # Default experiment name
 # Set random seeds for reproducibility
 torch.manual_seed(0)
 np.random.seed(0)
-
-# --- Utility Classes and Functions (from utilities3.py / fourier_2d.py) ---
 
 # Loss function
 class LpLoss(object):
