@@ -10,7 +10,6 @@ This project implements Fourier Neural Operators (FNO) for super-resolving fluid
 *   h5py
 *   Matplotlib
 *   scikit-learn
-*   basicsr (Required for `fno_fluid_cropped.py`)
 
 ## Install Dependencies
 Install dependencies using pip:
