@@ -3,7 +3,7 @@ import h5py
 import os
 import numpy as np
 import matplotlib
-matplotlib.use('Agg') # Use non-interactive backend BEFORE importing pyplot
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
@@ -32,22 +32,22 @@ except ImportError:
     mean_absolute_error = None
 
 # Data parameters
-DATA_PATH = "../CAKRes/DatasetRe16k/valid/nskt_Re16000-003.h5" # Or the path to your HDF5 file
-SAMPLE_LIMIT = 100 # Use a subset of samples for faster testing, None for all
-T_SKIP = 5         # Time downsampling factor
-N_SKIP = 2         # Spatial downsampling factor for original data loading
+DATA_PATH = "../CAKRes/DatasetRe16k/valid/nskt_Re16000-003.h5" 
+SAMPLE_LIMIT = 100 
+T_SKIP = 5         
+N_SKIP = 2         
 
 # FNO Model parameters
-SCALE = 4          # Super-resolution factor (LR grid -> HR grid)
-MODES = 16         # Number of Fourier modes
-WIDTH = 32         # Feature width in FNO layers - Reduced for memory. Start lower if OOM persists.
+SCALE = 4         
+MODES = 16       
+WIDTH = 32        
 
 # Training parameters
-BATCH_SIZE = 8    # Reduced for memory. Try 8 or 4 if OOM persists. Adjust LEARNING_RATE if needed.
+BATCH_SIZE = 8  
 LEARNING_RATE = 0.001
-EPOCHS = 50        # Reduced for quicker testing
-STEP_SIZE = 10     # Learning rate scheduler step size
-GAMMA = 0.5        # Learning rate scheduler gamma
+EPOCHS = 50      
+STEP_SIZE = 10     
+GAMMA = 0.5       
 WEIGHT_DECAY = 1e-4
 
 DEFAULT_EXP_NAME = 'fno_fluid_exp'
