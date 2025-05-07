@@ -36,7 +36,7 @@ The dataset are available [here](https://drive.google.com/drive/folders/17CK5aiO
 ### Install dependencies
 ```pip install -r requirements.txt```
 
-## Running FNO experiments
+## Running experiments
 ### Running `fno_fluid.py`
 
 ```bash
