@@ -1,8 +1,3 @@
-"""
-Applies Fourier Neural Operator (FNO) to fluid flow super-resolution.
-Adapted from fourier_2d.py and swinir_fluid.py.
-Includes option for random cropping and experiment logging.
-"""
 
 import h5py
 import os
