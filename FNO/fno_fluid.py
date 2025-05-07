@@ -14,15 +14,15 @@ import operator
 from functools import reduce
 from functools import partial
 import argparse
-import json # For saving config
-import csv  # For saving metrics
-from datetime import datetime # For timestamping experiments
+import json
+import csv  
+from datetime import datetime 
 import logging
 
 try:
     from basicsr.data.transforms import paired_random_crop
-    from basicsr.utils.img_util import tensor2img # For visualization
-    from sklearn.metrics import mean_squared_error, mean_absolute_error # If cropping
+    from basicsr.utils.img_util import tensor2img 
+    from sklearn.metrics import mean_squared_error, mean_absolute_error
     HAS_BASICSCR = True
 except ImportError:
     HAS_BASICSCR = False
